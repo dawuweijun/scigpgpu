@@ -1,1 +1,1 @@
-/usr/local/cuda/bin
+/usr/local/cuda-5.0/bin
