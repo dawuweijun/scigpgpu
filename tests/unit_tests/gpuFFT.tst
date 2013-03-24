@@ -1,0 +1,66 @@
+// =============================================================================
+// Scilab ( http://www.scilab.org/ ) - This file is part of Scilab
+// Copyright (C) DIGITEO - 2011 - Cedric Delamarre
+//
+//  This file is distributed under the same license as the Scilab package.
+// =============================================================================
+
+// <-- ENGLISH IMPOSED -->
+
+A = rand(3,2);
+Z = rand(3,4) + %i * rand(3,4);
+
+// ------------- Real -------------
+GPU = gpuFFT(A);
+assert_checkalmostequal(gpuGetData(GPU), fft(A), %eps); // forward
+gpuFree(GPU);
+
+GPU = gpuFFT(A,1);
+assert_checkalmostequal(gpuGetData(GPU), fft(A,1), %eps, [], "matrix"); // forward
+gpuFree(GPU);
+
+GPU = gpuFFT(A,1,[2 3]);
+assert_checkalmostequal(gpuGetData(GPU), fft(A,1,[2 3],[1 2]), %eps, [], "matrix"); // inverse
+gpuFree(GPU);
+
+// ------------- Complex -------------
+GPU = gpuFFT(Z);
+assert_checkalmostequal(gpuGetData(GPU), fft(Z), %eps, [], "matrix");
+gpuFree(GPU);
+
+GPU = gpuFFT(Z,1);
+assert_checkalmostequal(gpuGetData(GPU), fft(Z,1), %eps, [], "matrix");
+gpuFree(GPU);
+
+GPU = gpuFFT(Z,-1,[3 2 2]);
+assert_checkalmostequal(gpuGetData(GPU), fft(Z,-1,[3 2 2],[1 3 6]), %eps, [], "matrix");
+gpuFree(GPU);
+
+GPU = gpuFFT(5 + 2 * %i);
+assert_checkalmostequal(gpuGetData(GPU), fft(5 + 2 * %i), %eps, [], "matrix");
+gpuFree(GPU);
+
+// ------------- 3D -------------
+A = rand(1,24);
+dC = gpuFFT(A, -1, [4 2 3]);
+
+C = fftw(A, -1, [4 2 3], [1 4 8]);
+
+assert_checkalmostequal(gpuGetData(dC), C, %eps, [], "matrix");
+
+gpuFree(dC);
+
+// ------------- 1D -------------
+t=0:0.1:1000;
+x=3*sin(t)+8*sin(3*t)+0.5*sin(5*t)+3*rand(t);
+
+yy=gpuFFT(x',-1);
+y=fft(x',-1);
+assert_checkalmostequal(abs(y), abs(gpuGetData(yy)));
+gpuFree(yy);
+
+yy=gpuFFT(x,-1);
+y=fft(x,-1);
+assert_checkalmostequal(abs(y), abs(gpuGetData(yy)));
+gpuFree(yy);
+

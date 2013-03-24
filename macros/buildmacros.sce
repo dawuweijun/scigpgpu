@@ -1,0 +1,1 @@
+tbx_build_macros("gsimd",get_absolute_file_path("buildmacros.sce"));

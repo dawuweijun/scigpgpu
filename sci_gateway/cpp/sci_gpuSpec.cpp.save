@@ -1,0 +1,605 @@
+/*
+* Scilab ( http://www.scilab.org/ ) - This file is part of Scilab
+* Copyright (C) DIGITEO - 2012 - Cedric DELAMARRE
+*
+* This file must be used under the terms of the CeCILL.
+* This source file is licensed as described in the file COPYING, which
+* you should have received as part of this distribution.  The terms
+* are also available at
+* http://www.cecill.info/licences/Licence_CeCILL_V2-en.txt
+*
+*/
+/* ========================================================================== */
+#include "config_gpu.h"
+#include "gpuPointerManager.hxx"
+#ifdef WITH_CUDA
+    #include "pointerCuda.hxx"
+#endif
+#ifdef WITH_CUDA
+    #include "pointerOpenCL.hxx"
+#endif
+/* ========================================================================== */
+#include "config_gpu.h"
+#include "gpu_wrap.h"
+#include "useCuda.h"
+#include "gw_gpu.h"
+#include "checkDevice.h"
+#include "gpuContext.hxx"
+#include "magma.h"
+/* ========================================================================== */
+#include "api_scilab.h"
+#include "Scierror.h"
+#include "sciprint.h"
+/* ========================================================================== */
+// get from YaSp
+int isSymmetric(double* _pdblReal, double* _pdblImg, int _iIsComplex, int _iRows, int _iCols);
+/* ========================================================================== */
+extern "C"{
+    extern int C2F(vfinite)(int *n, double *v);
+}
+
+int sci_gpuSpec(char *fname)
+{
+    CheckRhs(1,1);
+    CheckLhs(1,2);
+
+    SciErr sciErr;
+
+    int inputType_A     = 0;
+    int* piAddr_A       = NULL;
+    double* h_A         = NULL;
+    double* hi_A        = NULL;
+    doublecomplex* zh_A = NULL;
+    int iRows_A         = 0;
+    int iCols_A         = 0;
+
+    void* pvPtr         = NULL;
+
+    bool bComplex       = false;
+    bool bSymmetric     = false;
+
+    int iOne            = 1;
+    int info            = 0;
+
+    PointerCuda* pcInput = NULL;
+
+#ifdef WITH_CUDA
+    cublasStatus status;
+#endif
+
+    try
+    {
+        if(isGpuInit() == false)
+        {
+            throw "gpu is not initialised. Please launch gpuInit() before use this function.";
+        }
+
+        // Get var env
+        sciErr = getVarAddressFromPosition(pvApiCtx, 1, &piAddr_A);
+        if(sciErr.iErr) throw sciErr;
+
+        sciErr = getVarType(pvApiCtx, piAddr_A, &inputType_A);
+        if(sciErr.iErr) throw sciErr;
+
+		#ifdef WITH_CUDA
+		if (useCuda())
+		{
+            if(inputType_A == sci_matrix)
+			{
+                if(isVarComplex(pvApiCtx, piAddr_A))
+                {
+                    bComplex = true;
+                    sciErr = getComplexMatrixOfDouble(pvApiCtx, piAddr_A, &iRows_A, &iCols_A, &h_A, &hi_A);
+                    if(iCols_A != iRows_A)
+                    {
+                        throw "gpuSpec : Wrong size for input argument #1: A square matrix expected.";
+                    }
+
+                    int iSize = iRows_A * iCols_A;
+                    if(C2F(vfinite)(&iSize, h_A) == 0 || C2F(vfinite)(&iSize, hi_A) == 0)
+                    {
+                        throw "gpuSpec : Wrong value for input argument #1: Inf and Nan not allowed.";
+                    }
+
+                    if(isSymmetric(h_A, hi_A, 1/* isComplex*/, iRows_A, iCols_A))
+                    {
+                        bSymmetric = true;
+                        pcInput = new PointerCuda(h_A, hi_A, iRows_A, iCols_A);
+                    }
+                    else
+                    {
+                        sciErr = getComplexZMatrixOfDouble(pvApiCtx, piAddr_A, &iRows_A, &iCols_A, &zh_A);
+                    }
+                }
+                else
+                {
+                    sciErr = getMatrixOfDouble(pvApiCtx, piAddr_A, &iRows_A, &iCols_A, &h_A);
+                    if(iCols_A != iRows_A)
+                    {
+                        throw "gpuSpec : Wrong size for input argument #1: A square matrix expected.";
+                    }
+
+                    int iSize = iRows_A * iCols_A;
+                    if(C2F(vfinite)(&iSize, h_A) == 0)
+                    {
+                        throw "gpuSpec : Wrong value for input argument #1: Inf and Nan not allowed.";
+                    }
+
+                    if(isSymmetric(h_A, NULL, 0/* isComplex*/, iRows_A, iCols_A))
+                    {
+                        bSymmetric = true;
+                        pcInput = new PointerCuda(h_A, iRows_A, iCols_A);
+                    }
+                }
+
+                if(sciErr.iErr) throw sciErr;
+
+                if(isEmptyMatrix(pvApiCtx, piAddr_A))
+                {
+                    for(int i = 1; i <= Lhs; i++)
+                    {
+                        createEmptyMatrix(pvApiCtx, Rhs + i);
+                        LhsVar(i) = Rhs + i;
+                    }
+
+                    PutLhsVar();
+                    return 0;
+                }
+
+                if(iRows_A == -1 || iCols_A == -1)
+                {
+                    throw "gpuSpec : Wrong size for input argument #1: Size of a*eye() not allowed.";
+                }
+			}
+			else if(inputType_A == sci_pointer)
+			{
+				sciErr = getPointer(pvApiCtx, piAddr_A, (void**)&pvPtr);
+				if(sciErr.iErr) throw sciErr;
+
+                pcInput = (PointerCuda*)pvPtr;
+                if(!PointerManager::getInstance()->findGpuPointerInManager(pcInput))
+                    throw "gpuSpec : Wrong type for input argument #1: A matrix created with GPU functions expected.";
+
+                pcInput = pcInput->clone();
+
+		        if(strcmp(pcInput->getGpuType().c_str(),"Cuda"))
+			        throw "gpuSpec : Wrong type for input argument #1: A Cuda pointer expected.";
+
+                iRows_A = pcInput->getRows();
+                iCols_A = pcInput->getCols();
+
+                if(iCols_A != iRows_A)
+                {
+                    throw "gpuSpec : Wrong size for input argument #1: A square matrix expected.";
+                }
+
+                // magma have not yet a gpu interface for dgeev (case where the matrix is not symmetric)
+                if(pcInput->isSymmetric() == false)
+                {
+                    h_A = new double[pcInput->getSize()];
+                    if(pcInput->isGpuComplex())
+                    {
+                        bComplex = true;
+                        hi_A = new double[pcInput->getSize()];
+                        pcInput->getData(h_A, hi_A);
+                    }
+                    else
+                    {
+                        pcInput->getData(h_A);
+                    }
+                }
+                else
+                {
+                    bComplex = pcInput->isGpuComplex();
+                    bSymmetric = true;
+                }
+			}
+			else
+			{
+                throw "gpuSpec : Wrong type for input argument #1: A matrix or gpu pointer expected.";
+			}
+
+            // A : check inf nan (isfinite()), size null and eye matrix sci_matrix case ok but not in gpuPtr case
+		    // Performs operation using magma
+            int eigenValuesCols = (Lhs == 1) ? 1 : iCols_A;
+
+            // With 'V', checks result it can be wrong in symetric case because
+            // scilab use dsyev and zheev where we use dsyevd and zheevd.
+            char job = (Lhs == 2) ? 'V' : 'N';
+
+            if(bSymmetric)
+            {
+                double* pdblEigenValues = NULL;
+                if(Lhs == 2)
+                {
+                    pdblEigenValues = new double[iCols_A];
+                }
+                else
+                {
+                    sciErr = allocMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, 1, &pdblEigenValues);
+                    if(sciErr.iErr) throw sciErr;
+                    LhsVar(1) = Rhs + 1;
+                }
+
+                int iWorkSize   = -1;
+                int iIWorkSize  = -1;
+                int iWSize  = iCols_A * iCols_A;
+
+                if(bComplex) //ZHEEV
+                {
+                    doublecomplex* pdcW = (doublecomplex*)malloc(iWSize * sizeof(doublecomplex));
+
+                    int iRWorkSize  = -1;
+                    // Compute sizes of workspaces
+                    doublecomplex dcWorkSize;
+                    dcWorkSize.r        = 0;
+                    dcWorkSize.i        = 0;
+                    double dRWorkSize   = 0;
+                    int IWorkSize       = 0;
+
+                    magma_zheevd_gpu(job, 'U', iCols_A, NULL, iCols_A, NULL,
+                                     (cuDoubleComplex*) pdcW, iCols_A,
+                                     (cuDoubleComplex*) (&dcWorkSize), iWorkSize,
+                                     &dRWorkSize, iRWorkSize, &IWorkSize, iIWorkSize, &info);
+
+                    if(info) throw "get workspace sizes failed.\n";
+
+                    iWorkSize  = (int)dcWorkSize.r;
+                    iRWorkSize = (int)dRWorkSize;
+                    iIWorkSize = IWorkSize;
+
+                    // Alloc workspaces
+                    doublecomplex* pWork = (doublecomplex*)malloc(iWorkSize * sizeof(doublecomplex));
+                    double* pRWork       = new double[iRWorkSize];
+                    int* pIWork          = new int[iIWorkSize];
+
+                    // perform operation
+                    magma_zheevd_gpu(job, 'U', iCols_A, (cuDoubleComplex*) pcInput->getGpuPtr(), iCols_A,
+                                     pdblEigenValues, (cuDoubleComplex*) pdcW, iCols_A,
+                                     (cuDoubleComplex*) pWork, iWorkSize, pRWork, iRWorkSize, pIWork, iIWorkSize, &info);
+
+                    if(info) throw "Operation failed.\n";
+
+                    free(pdcW);
+                    free(pWork);
+                    delete pRWork;
+                    delete pIWork;
+
+                }
+                else // DSYEV
+                {
+                    double* pdW = new double[iWSize];
+
+                    // Compute sizes of workspaces
+                    double dWorkSize = 0;
+                    int IWorkSize    = 0;
+
+                    if(Lhs == 2 && iCols_A > 1)
+                    {
+                        iWorkSize = 1 + 6 * iCols_A + 2 * iCols_A * iCols_A;
+                        iIWorkSize = 3 + 5 * iCols_A;
+                    }
+                    else
+                    {
+                        magma_dsyevd_gpu(job, 'U', iCols_A, NULL, iCols_A, NULL,
+                                         pdW, iCols_A, &dWorkSize, iWorkSize,
+                                         &IWorkSize, iIWorkSize, &info);
+                                         
+                        if(info) throw "get workspace sizes failed !!!\n";
+
+                        iWorkSize  = (int)dWorkSize;
+                        iIWorkSize = IWorkSize;
+                    }
+
+                    // Alloc workspaces
+                    double* pWork = new double[iWorkSize];
+                    int* pIWork   = new int[iIWorkSize];
+
+                    magma_dsyevd_gpu(job, 'U', iCols_A, pcInput->getGpuPtr(), iCols_A, pdblEigenValues,
+                                     pdW, iCols_A, pWork, iWorkSize, pIWork, iIWorkSize, &info);
+                                     
+                    if(info) throw "Operation failed.\n";
+
+                    delete pdW;
+                    delete pWork;
+                    delete pIWork;
+                }
+
+                if(Lhs == 2)
+                {
+                    double* temp = pdblEigenValues;
+
+                    sciErr = allocMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, iCols_A, &pdblEigenValues);
+                    if(sciErr.iErr) throw sciErr;
+                    LhsVar(1) = Rhs + 1;
+                    memset(pdblEigenValues, 0x00, iCols_A * iCols_A * sizeof(double));
+
+                    // set eigen values in diagonal
+                    for(int i = 0; i < iCols_A; i++)
+                    {
+                        pdblEigenValues[i + i * iCols_A] = temp[i];
+                    }
+
+                    delete temp;
+
+                    PointerManager::getInstance()->addGpuPointerInManager(pcInput);
+                    sciErr = createPointer(pvApiCtx,Rhs+2, (void*)pcInput);
+                    if(sciErr.iErr) throw sciErr;
+                    LhsVar(2)=Rhs+2;
+                }
+                else
+                {
+                    delete pcInput;
+                }
+
+            }
+            else
+            {
+                throw "Case non symmetric not yet implemented.";
+
+                double* pdblEigenReal = NULL;
+                double* pdblEigenImag = NULL;
+                double* pdblRigthVecR = NULL;
+                double* pdblRigthVecI = NULL;
+
+                int iVlSize     = (Lhs == 2) ? iCols_A : 1;
+                int iVrSize     = (Lhs == 2) ? iCols_A : 1;
+                int iWorkSize   = (1 + magma_get_zgehrd_nb(iCols_A)) * iCols_A;
+
+                if(bComplex) // ZGEEV
+                {
+                    doublecomplex* pdblEigenValues = (doublecomplex*)malloc(iCols_A * sizeof(doublecomplex));
+                    doublecomplex* pdblRigthVector = (doublecomplex*)malloc(iCols_A * iVlSize * sizeof(doublecomplex));
+                    doublecomplex* pdblLeftVector  = (doublecomplex*)malloc(iCols_A * iVrSize * sizeof(doublecomplex));
+                    doublecomplex* pdblWork        = (doublecomplex*)malloc(iWorkSize * sizeof(doublecomplex));
+
+                    double* pdblRWork = new double[2 * iCols_A];
+
+                    magma_zgeev('N', job, iCols_A, (cuDoubleComplex*)zh_A, iCols_A, (cuDoubleComplex*)pdblEigenValues,
+                                (cuDoubleComplex*)pdblLeftVector, iVlSize, (cuDoubleComplex*)pdblRigthVector, iVrSize,
+                                (cuDoubleComplex*)pdblWork, iWorkSize, pdblRWork, &info);
+
+                    if(Lhs == 2)
+                    {
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, iCols_A, &pdblRigthVecR, &pdblRigthVecI);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(1) = Rhs + 1;
+
+                        for(int i = 0; i < iCols_A * iCols_A; i++)
+                        {
+                            pdblRigthVecR[i] = pdblRigthVector[i].r;
+                            pdblRigthVecI[i] = pdblRigthVector[i].i;
+                        }
+
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 2, iCols_A, iCols_A, &pdblEigenReal, &pdblEigenImag);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(2) = Rhs + 2;
+                        memset(pdblEigenReal, 0x00, iCols_A * iCols_A * sizeof(double));
+                        memset(pdblEigenImag, 0x00, iCols_A * iCols_A * sizeof(double));
+
+                        // set eigen values in diagonal
+                        for(int i = 0; i < iCols_A; i++)
+                        {
+                            pdblEigenReal[i + i * iCols_A] = pdblEigenValues[i].r;
+                            pdblEigenImag[i + i * iCols_A] = pdblEigenValues[i].i;
+                        }
+                    }
+                    else
+                    {
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, 1, &pdblEigenReal, &pdblEigenImag);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(1) = Rhs + 1;
+
+                        for(int i = 0; i < iCols_A; i++)
+                        {
+                            pdblEigenReal[i] = pdblEigenValues[i].r;
+                            pdblEigenImag[i] = pdblEigenValues[i].i;
+                        }
+                    }
+
+                    free(pdblEigenValues);
+                    free(pdblRigthVector);
+                    free(pdblLeftVector);
+                    free(pdblWork);
+                    delete pdblRWork;
+
+                    printf("complex and no symmetric !\n");
+                }
+                else // DGEEV
+                {
+                    double* pdblEigenValuesR = NULL;
+                    double* pdblEigenValuesI = NULL;
+
+                    if(Lhs == 2)
+                    {
+                        pdblEigenValuesR = new double[iCols_A];
+                        pdblEigenValuesI = new double[iCols_A];
+                    }
+                    else
+                    {
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, 1, &pdblEigenValuesR, &pdblEigenValuesI);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(1) = Rhs + 1;
+                    }
+
+                    double* pdblRigthVector = new double[iCols_A * iVlSize];
+                    double* pdblLeftVector  = new double[iCols_A * iVrSize];
+                    double* pdblWork        = new double[iWorkSize];
+
+                    magma_dgeev('N', job, iCols_A, h_A, iCols_A, pdblEigenValuesR, pdblEigenValuesI,
+                                pdblLeftVector, iVlSize, pdblRigthVector, iVrSize,
+                                pdblWork, iWorkSize, &info);
+
+                    if(Lhs == 2)
+                    {
+                        double* pdblRigthVectorR = NULL;
+                        double* pdblRigthVectorI = NULL;
+
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 1, iCols_A, iVrSize, &pdblRigthVectorR, &pdblRigthVectorI);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(1) = Rhs + 1;
+
+                        int ij;
+                        int ij1;
+
+                        for(int j = 0; j < iCols_A; j++)
+                        {
+                            if(pdblEigenValuesI[j] == 0)
+                            {
+                                for(int i = 0; i < iCols_A; i++)
+                                {
+                                    ij = i + j * iCols_A;
+                                    pdblRigthVectorR[ij] = pdblRigthVector[ij];
+                                    pdblRigthVectorI[ij] = 0;
+                                }
+                            }
+                            else
+                            {
+                                for(int i = 0; i < iCols_A ;i++)
+                                {
+                                    ij = i + j * iCols_A;
+                                    ij1 = i + (j + 1) * iCols_A;
+                                    pdblRigthVectorR[ij] = pdblRigthVector[ij];
+                                    pdblRigthVectorI[ij] = pdblRigthVector[ij1];
+                                    pdblRigthVectorR[ij1] = pdblRigthVector[ij];
+                                    pdblRigthVectorI[ij1] = -pdblRigthVector[ij1];
+                                }
+                                j++;
+                            }
+                        }
+
+                        sciErr = allocComplexMatrixOfDouble(pvApiCtx, Rhs + 2, iCols_A, iCols_A, &pdblEigenReal, &pdblEigenImag);
+                        if(sciErr.iErr) throw sciErr;
+                        LhsVar(2) = Rhs + 2;
+                        memset(pdblEigenReal, 0x00, iCols_A * iCols_A * sizeof(double));
+                        memset(pdblEigenImag, 0x00, iCols_A * iCols_A * sizeof(double));
+
+                        // set eigen values in diagonal
+                        for(int i = 0; i < iCols_A; i++)
+                        {
+                            pdblEigenReal[i + i * iCols_A] = pdblEigenValuesR[i];
+                            pdblEigenImag[i + i * iCols_A] = pdblEigenValuesI[i];
+                        }
+                    }
+
+                    if(Lhs == 2)
+                    {
+                        delete pdblEigenValuesR;
+                        delete pdblEigenValuesI;
+                    }
+
+                    delete pdblRigthVector;
+                    delete pdblLeftVector;
+                    delete pdblWork;
+
+                    printf("real and no symmetric \n");
+                }
+            }
+
+
+		}
+		#endif
+		#ifdef WITH_OPENCL
+		if (!useCuda())
+		{
+			throw "gpuSpec : not yet implemented with OpenCL.";
+		}
+		#endif
+
+        PutLhsVar();
+        return 0;
+    }
+    catch(const char* str)
+    {
+        Scierror(999,"%s\n",str);
+    }
+    catch(SciErr E)
+    {
+        printError(&E, 0);
+    }
+	#ifdef WITH_CUDA
+    if (useCuda())
+    {
+//        if((inputType_A == sci_matrix) && bSymmetric)
+//        {
+//            delete pcInput;
+//        }
+    }
+    #endif
+    #ifdef WITH_OPENCL
+    if (!useCuda())
+    {
+        Scierror(999,"gpuSpec : not yet implemented with OpenCL.\n");
+    }
+    #endif
+
+    return EXIT_FAILURE;
+}
+/* ========================================================================== */
+int isSymmetric(double* _pdblReal, double* _pdblImg, int _iIsComplex, int _iRows, int _iCols)
+{
+    int iDiag   = 0;
+    int iRow    = 0;
+    int iCol    = 0;
+
+    // If the matrix is not Square, it can not be symmetric
+    if(_iRows != _iCols)
+    {
+        return 0;
+    }
+
+    if(_iIsComplex)
+    {// complex case
+
+        //matrix must be an Hermitian matrix
+
+        //Diag must be real
+        for(iDiag = 0 ; iDiag < _iRows ; iDiag++)
+        {
+            int iPos = iDiag + iDiag * _iRows;
+            if(_pdblImg[iPos] != 0)
+            {
+                return 0;
+            }
+        }
+
+        //real part == real part and img part == -(img part)
+        for(iRow = 0 ; iRow < _iRows; iRow++)
+        {
+            for(iCol = 0 ; iCol < iRow ; iCol++)
+            {
+                int iRef    = iRow + iCol * _iRows;
+                int iCheck  = iCol + iRow * _iRows;
+
+                if(_pdblReal[iRef] != _pdblReal[iCheck])
+                {//real part
+                    return 0;
+                }
+
+                if(_pdblImg[iRef] != -(_pdblImg[iCheck]))
+                {//real part
+                    return 0;
+                }
+
+            }
+        }
+    }
+    else
+    {//real case
+        for(iRow = 0 ; iRow < _iRows; iRow++)
+        {
+            for(iCol = 0 ; iCol < iRow ; iCol++)
+            {
+                int iRef    = iRow + iCol * _iRows;
+                int iCheck  = iCol + iRow * _iRows;
+
+                if(_pdblReal[iRef] != _pdblReal[iCheck])
+                {//real part
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return 1;
+}

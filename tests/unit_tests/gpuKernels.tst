@@ -1,0 +1,34 @@
+// =============================================================================
+// Scilab ( http://www.scilab.org/ ) - This file is part of Scilab
+// Copyright (C) DIGITEO - 2011 - Cedric Delamarre
+//
+//  This file is distributed under the same license as the Scilab package.
+// =============================================================================
+
+_dir = pwd();
+chdir(TMPDIR);
+
+if gpuUseCuda() then
+	copyfile(gpgpu_getToolboxPath() + "/tests/unit_tests"+"/matrixAdd.cu",TMPDIR+"/matrixAdd.cu");
+end
+if ~gpuUseCuda() then
+	copyfile(gpgpu_getToolboxPath() + "/tests/unit_tests"+"/matrixAdd.cl",TMPDIR+"/matrixAdd.cl");
+end
+
+rows = 8;
+cols = 8;
+A=rand(rows,cols);
+gA=gpuSetData(A);
+gB=gpuAlloc(rows,cols);
+bin=gpuBuild(TMPDIR+"/matrixAdd");
+fonc=gpuLoadFunction(bin,"matrixAdd");
+lst=list(gB,gA,gA,int32(rows),int32(cols));
+gpuApplyFunction(fonc,lst,rows/2,cols/2,2,2);
+B=gpuGetData(gB);
+gpuFree(gA);
+gpuFree(gB);
+
+if B <> (A+A) then pause,end
+
+cd(_dir);
+

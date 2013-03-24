@@ -1,0 +1,47 @@
+            Changes between versions 1.2 and 1.3 of sciGPGPU module of Scilab
+            =================================================================
+
+License:
+========
+
+The license of all demos and examples have been changed to the 3-clause BSD
+license. The domain public license was not valid in some countries.
+
+Known incompatibilities:
+========================
+
+Minimal version of scilab   : 5.4
+Minimal version of Cuda     : 3.2
+Maximal version of Cuda     : 4.0
+Maximal version of gcc      : 4.4
+
+Features:
+=========
+
+* Operator overloaded : + * '
+* Elementwise Min/Max.
+* gpuMatrix added.
+* Overload of size function added.
+* Extraction of GPU matrix added.
+* Insertion into a GPU matrix added.
+* gpuSubtract added.
+* gpuClone added.
+* gpuDotMult added. (.*)
+* gpuComplex added.
+* gpuSplin2d added.
+* gpuKronecker added. (.*.)
+* gpuNdgrid added.
+* gpuOnes added.
+
+Bugs:
+=====
+
+* gpuFFT : Bad result with one dimension.
+* Fix OpenCL compilation.
+* Fix load with ATI Card.
+
+Other:
+======
+
+* Thirdparty removed. (Cuda dll for Windows)
+* Documentation updated.

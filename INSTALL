@@ -1,0 +1,49 @@
+sciGPGPU is a Scilab Toolbox to allow interaction between Scilab and CUDA/OpenCL.
+
+---------------------- Linux ----------------------
+
+	Requirements :
+		- CUDA Toolkit 3.2 to 4.0
+		- scilab >= 5.4
+
+	How to build from tar.gz file :
+		- Unzip the tar.gz in your SCI/contrib path.
+		- Launch scilab and 'cd' to SCI/contrib/sciGPGPU-* path.
+		- exec builder.sce
+		- Restart your scilab, now sciGPGPU should be available in the toolbox menu.
+
+	Please modify the nvccdir.txt to write the nvcc executable.(by default, /usr/local/cuda/bin/nvcc)
+	Please modify the cudaLib.txt to write the library path. One path by line. (by default, /usr/local/cuda/lib)
+	Please modify the cudaInc.txt to write the include path. One path by line. (by default, /usr/local/cuda/inc)
+
+
+---------------------- Windows ----------------------
+
+	Requirements :
+		- Nvidia : CUDA Toolkit 3.2 to 4.0
+		- ATI    : AMD APP SDK V2.8
+		- scilab >= 5.4 (could work with precedent version, but this was not tested)
+		- Visual Studio 2009
+
+	How to build from .zip file :
+		- Unzip the .zip in your SCI/contrib path.
+		- Launch scilab and 'cd' to SCI/contrib/sciGPGPU-* path.
+		- exec builder.sce
+		- Restart your scilab, now sciGPGPU should be available in the toolbox menu.
+
+
+---------------------- All system ----------------------
+
+	How to build from git :
+		- Clone the repository with "git clone git@git.forge.scilab.org:sciCuda.git".
+		- cd sciCuda/sciGPGPU
+		- Launch scilab
+		- 'exec builder.sce'
+		- 'exec loader.sce'
+
+	How to choose the compilation mode:
+
+		At the top of the builder.sce file there are two variable :
+			-WITH_CUDA, allow the toolbox to use Cuda.
+			-WITH_OPENCL, allow the toolbox to use OpenCL.
+		The two variables can be true, then you will be able to switch between Cuda and OpenCL after the toolbox building.

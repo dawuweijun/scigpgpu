@@ -1,0 +1,561 @@
+/*
+* Scilab ( http://www.scilab.org/ ) - This file is part of Scilab
+* Copyright (C) DIGITEO - 2012 - Cedric DELAMARRE
+*
+* This file must be used under the terms of the CeCILL.
+* This source file is licensed as described in the file COPYING, which
+* you should have received as part of this distribution.  The terms
+* are also available at
+* http://www.cecill.info/licences/Licence_CeCILL_V2-en.txt
+*
+*/
+/* ========================================================================== */
+#include "config_gpu.h"
+#include "gpuPointerManager.hxx"
+#ifdef WITH_CUDA
+    #include "pointerCuda.hxx"
+#endif
+#ifdef WITH_CUDA
+    #include "pointerOpenCL.hxx"
+#endif
+/* ========================================================================== */
+#include "gpu_wrap.h"
+#include "useCuda.h"
+#include "gw_gpu.h"
+#include "checkDevice.h"
+#include "gpuContext.hxx"
+/* ========================================================================== */
+#include "api_scilab.h"
+#include "Scierror.h"
+#include "sciprint.h"
+#include "interp3d.h"
+/* ========================================================================== */
+int sci_gpuInterp3d(char *fname)
+{
+    CheckRhs(4,5);
+    CheckLhs(1,4);
+
+    SciErr sciErr;
+
+    int* piAddr     = NULL;
+    int iRows       = 0;
+    int iCols       = 0;
+    int inputType   = 0;
+    double* h       = NULL;
+    void* pvPtr     = NULL;
+
+    int iItemType = 0;
+    int* piAddrChild = NULL;
+
+    // input data
+    std::vector<PointerCuda*> vectInputs;
+    std::vector<PointerCuda*> vectInputsItem;
+    bool isGpuPtr[3];
+    bool isGpuPtrItem[6];
+
+    int iType       = 8; // default C0
+    int sizeOfXp    = 0;
+
+    // output data
+    PointerCuda* tabOutputs[4];
+    for(int i = 0; i < 4; i++)
+    {
+        tabOutputs[i] = NULL;
+    }
+
+    double pdblOrder[3];
+
+    #ifdef WITH_OPENCL
+    if (!useCuda())
+    {
+        throw "gpuInterp3d : not yet implemented with OpenCL.";
+    }
+    #endif
+
+    try
+    {
+        if(isGpuInit() == false)
+        {
+            throw "gpuInterp3d : gpu is not initialised. Please launch gpuInit() before use this function.";
+        }
+
+// *** check type of input args and get it. ***
+        for(int i = 0; i < 3; i++)
+        {
+            // Get var env
+            sciErr = getVarAddressFromPosition(pvApiCtx, i+1, &piAddr);
+            if(sciErr.iErr) throw sciErr;
+
+            //check type
+            sciErr = getVarType(pvApiCtx, piAddr, &inputType);
+            if(sciErr.iErr) throw sciErr;
+
+            if(inputType == sci_pointer)
+            {
+                sciErr = getPointer(pvApiCtx, piAddr, (void**)&pvPtr);
+                if(sciErr.iErr) throw sciErr;
+
+                #ifdef WITH_CUDA
+                if(useCuda())
+                {
+                    PointerCuda* gpuPtr = (PointerCuda*)pvPtr;
+                    if(!PointerManager::getInstance()->findGpuPointerInManager(gpuPtr))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Bad type for input argument #%d : Only variables created with GPU functions allowed.",i+1);
+                        throw str;
+                    }
+
+                    if(strcmp(gpuPtr->getGpuType().c_str(),"Cuda"))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Bad pointer type for input argument #%d : Make sure that is a Cuda pointer.",i+1);
+                        throw str;
+                    }
+
+                    if(gpuPtr->isGpuComplex())
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for input argument #%d : A real matrix expected.",i+1);
+                        throw str;
+                    }
+
+                    vectInputs.push_back(gpuPtr);
+                    isGpuPtr[i] = true;
+                }
+                #endif
+            }
+            else if(inputType == sci_matrix)
+            {
+                #ifdef WITH_CUDA
+                if(useCuda())
+                {
+                    // Get size and data
+                    if(isVarComplex(pvApiCtx, piAddr))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for input argument #%d : A real matrix expected.",i+1);
+                        throw str;
+                    }
+                    else
+                    {
+                        sciErr = getMatrixOfDouble(pvApiCtx, piAddr, &iRows, &iCols, &h);
+                        vectInputs.push_back(new PointerCuda(h, iRows, iCols));
+                    }
+
+                    if(sciErr.iErr) throw sciErr;
+
+                    isGpuPtr[i] = false;
+                }
+                #endif
+            }
+            else
+            {
+                char str[100];
+                sprintf(str,"gpuInterp3d : Bad type for input argument #%d : A matrix or gpu pointer expected.",i+1);
+                throw str;
+            }
+        }
+
+        sizeOfXp = vectInputs[0]->getSize();
+        if(vectInputs[1]->getRows() != vectInputs[0]->getRows() ||
+           vectInputs[1]->getCols() != vectInputs[0]->getCols() ||
+           vectInputs[2]->getRows() != vectInputs[0]->getRows() ||
+           vectInputs[2]->getCols() != vectInputs[0]->getCols())
+        {
+            throw "gpuInterp3d: Wrong size for input arguments #1, #2 and #3: Same size expected.";
+        }
+
+        // Get items of tlist
+        sciErr = getVarAddressFromPosition(pvApiCtx, 4, &piAddr);
+        if(sciErr.iErr) throw sciErr;
+
+        sciErr = getVarType(pvApiCtx, piAddr, &inputType);
+        if(sciErr.iErr) throw sciErr;
+
+        if(inputType != sci_tlist)
+        {
+            throw "gpuInterp3d: Wrong type for input argument #4: A Tlist expected.";
+        }
+
+        int iItem = 0;
+        sciErr = getListItemNumber(pvApiCtx, piAddr, &iItem);
+        if(sciErr.iErr) throw sciErr;
+
+        if(iItem != 7)
+        {
+            throw "gpuInterp3d: Wrong size for input arguments #4: A tlist of 7 items expected.";
+        }
+
+        // check the type of the tlist
+        sciErr = getListItemAddress(pvApiCtx, piAddr, 1, &piAddrChild);
+        if(sciErr.iErr) throw sciErr;
+
+        sciErr = getVarType(pvApiCtx, piAddrChild, &iItemType);
+        if(sciErr.iErr) throw sciErr;
+
+        if(iItemType != sci_strings)
+        {
+            throw "gpuInterp3d: Wrong type for item 1 of input argument #4: A String expected.";
+        }
+
+        //fisrt call to retrieve dimensions
+        sciErr = getMatrixOfString(pvApiCtx, piAddrChild, &iRows, &iCols, NULL, NULL);
+        if(sciErr.iErr) throw sciErr;
+
+        int* piLen = new int[iRows * iCols];
+        char** pstType = (char**)malloc(iRows * iCols * sizeof(char*));
+        //second call to retrieve length of each string
+        sciErr = getMatrixOfString(pvApiCtx, piAddrChild, &iRows, &iCols, piLen, NULL);
+        if(sciErr.iErr) throw sciErr;
+
+        for(int i = 0; i < iRows * iCols; i++)
+        {
+            pstType[i] = new char[piLen[i] + 1];//+ 1 for null termination
+        }
+
+        //third call to retrieve data
+        sciErr = getMatrixOfString(pvApiCtx, piAddrChild, &iRows, &iCols, piLen, pstType);
+        if(sciErr.iErr) throw sciErr;
+
+        if(strcmp(pstType[0], "tensbs3d") != 0)
+        {
+            char str[100];
+            sprintf(str,"gpuInterp3d : Wrong type for input argument #4 : tensbs3d tlist expected.", pstType);
+            throw str;
+        }
+
+        for(int i = 0; i < iRows * iCols; i++)
+        {
+            delete pstType[i];
+        }
+        free(pstType);
+
+        for(int i = 1; i < iItem; i++)
+        {
+            sciErr = getListItemAddress(pvApiCtx, piAddr, i + 1, &piAddrChild);
+            if(sciErr.iErr) throw sciErr;
+
+            sciErr = getVarType(pvApiCtx, piAddrChild, &iItemType);
+            if(sciErr.iErr) throw sciErr;
+
+            if(iItemType == sci_pointer)
+            {
+                sciErr = getPointer(pvApiCtx, piAddrChild, (void**)&pvPtr);
+                if(sciErr.iErr) throw sciErr;
+
+                #ifdef WITH_CUDA
+                if(useCuda())
+                {
+                    PointerCuda* gpuPtr = (PointerCuda*)pvPtr;
+                    if(!PointerManager::getInstance()->findGpuPointerInManager(gpuPtr))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for item #%d of input argument #4 : Only variables created with GPU functions allowed.",i+1);
+                        throw str;
+                    }
+
+                    if(strcmp(gpuPtr->getGpuType().c_str(),"Cuda"))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for item #%d of input argument #4 : Make sure that is a Cuda pointer.",i+1);
+                        throw str;
+                    }
+
+                    if(gpuPtr->isGpuComplex())
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for item #%d of input argument #4 : A real matrix expected.",i+1);
+                        throw str;
+                    }
+
+                    vectInputsItem.push_back(gpuPtr);
+                    isGpuPtrItem[i] = true;
+
+                    if(i == 4)
+                    {
+                        gpuPtr->getData(pdblOrder);
+                    }
+                }
+                #endif
+            }
+            else if(iItemType == sci_matrix)
+            {
+                #ifdef WITH_CUDA
+                if(useCuda())
+                {
+                    // Get size and data
+                    if(isVarComplex(pvApiCtx, piAddrChild))
+                    {
+                        char str[100];
+                        sprintf(str,"gpuInterp3d : Wrong type for item #%d of input argument #4 : A real matrix expected.",i+1);
+                        throw str;
+                    }
+                    else
+                    {
+                        sciErr = getMatrixOfDouble(pvApiCtx, piAddrChild, &iRows, &iCols, &h);
+                        vectInputsItem.push_back(new PointerCuda(h, iRows, iCols));
+                    }
+
+                    if(sciErr.iErr) throw sciErr;
+
+                    isGpuPtrItem[i] = false;
+                }
+                #endif
+            }
+            else if(i == 4 && sci_ints) // Order argument of splin3d (size == 3)
+            {
+                int* data = NULL;
+                sciErr = getMatrixOfInteger32(pvApiCtx, piAddrChild, &iRows, &iCols, &data);
+                if(sciErr.iErr) throw sciErr;
+
+                for(int j = 0; j < 3; j++)
+                {
+                    pdblOrder[j] = (double)data[j];
+                }
+
+                #ifdef WITH_CUDA
+                if(useCuda())
+                {
+                    vectInputsItem.push_back(new PointerCuda(pdblOrder, iRows, iCols));
+                }
+                #endif
+
+                isGpuPtrItem[i] = false;
+            }
+            else
+            {
+                char str[100];
+                sprintf(str,"gpuInterp3d : Bad type for item %d of input argument #4 : A matrix or a gpu pointer expected.",i+1);
+                throw str;
+            }
+        }
+
+        // out mode
+        if(Rhs == 5)
+        {
+            // Get var env
+            sciErr = getVarAddressFromPosition(pvApiCtx, 5, &piAddr);
+            if(sciErr.iErr) throw sciErr;
+
+            //check type
+            sciErr = getVarType(pvApiCtx, piAddr, &inputType);
+            if(sciErr.iErr) throw sciErr;
+
+            if(inputType != sci_strings)
+            {
+                throw "gpuInterp3d: Wrong type for input argument #5: A String expected.";
+            }
+
+            //fisrt call to retrieve dimensions
+            sciErr = getMatrixOfString(pvApiCtx, piAddr, &iRows, &iCols, NULL, NULL);
+            if(sciErr.iErr) throw sciErr;
+
+            if(iRows * iCols != 1)
+            {
+                throw "gpuInterp3d: Wrong size for input argument #5: A scalar String expected.";
+            }
+
+            int iLen = 0;
+            //second call to retrieve length of each string
+            sciErr = getMatrixOfString(pvApiCtx, piAddr, &iRows, &iCols, &iLen, NULL);
+            if(sciErr.iErr) throw sciErr;
+
+            char* pstData = new char[iLen+1];//+ 1 for null termination
+            //third call to retrieve data
+            sciErr = getMatrixOfString(pvApiCtx, piAddr, &iRows, &iCols, &iLen, &pstData);
+            if(sciErr.iErr) throw sciErr;
+
+            if(strcmp(pstData, "C0") == 0)
+            {
+                iType = 8;
+            }
+            else if(strcmp(pstData, "by_zero") == 0)
+            {
+                iType = 7;
+            }
+            else if(strcmp(pstData, "periodic") == 0)
+            {
+                iType = 3;
+            }
+            else if(strcmp(pstData, "by_nan") == 0)
+            {
+                iType = 10;
+            }
+            else
+            {
+                char str[100];
+                sprintf(str,"gpuInterp3d : Wrong value for input argument #5 : '%s' is a unknow outmode type.", pstData);
+                throw str;
+            }
+
+            delete pstData;
+        }
+
+        #ifdef WITH_CUDA
+        if (useCuda())
+        {
+// *** Perform operation. ***
+            cudaError_t cudaStat = cudaSuccess;
+
+            tabOutputs[0] = new PointerCuda(vectInputs[0]->getRows(), vectInputs[0]->getCols(), false);
+
+            double MaxOrder = vectInputsItem[3]->getMax();
+            int workSize = (int)(pdblOrder[1] * pdblOrder[2] + 3 * MaxOrder + pdblOrder[2]);
+            PointerCuda* workSpace = new PointerCuda(workSize, 1, false);
+
+            if(Lhs == 1)
+            {
+                // Tricubic interpolation
+                cudaStat = interp3d_gpu(vectInputs[0]->getGpuPtr(), //xp
+                                        vectInputs[1]->getGpuPtr(), //yp
+                                        vectInputs[2]->getGpuPtr(), //zp
+                                        sizeOfXp,
+                                        vectInputsItem[0]->getGpuPtr(), //x
+                                        vectInputsItem[1]->getGpuPtr(), //y
+                                        vectInputsItem[2]->getGpuPtr(), //z
+                                        vectInputsItem[3]->getGpuPtr(), //order
+                                        vectInputsItem[4]->getGpuPtr(), //coef
+                                        vectInputsItem[5]->getGpuPtr(), //minmax
+                                        vectInputsItem[0]->getSize(), //xSize
+                                        vectInputsItem[1]->getSize(), //ySize
+                                        vectInputsItem[2]->getSize(), //zSize
+                                        vectInputsItem[3]->getSize(), //orderSize
+                                        vectInputsItem[4]->getSize(), //coefSize
+                                        vectInputsItem[5]->getSize(), //minmaxSize
+                                        workSpace->getGpuPtr(),
+                                        tabOutputs[0]->getGpuPtr(), //Fp (result)
+                                        iType);
+            }
+            else
+            {
+                for(int i = 0; i < 4; i++)
+                {
+                    tabOutputs[i] = new PointerCuda(vectInputs[0]->getRows(), vectInputs[0]->getCols(), false);
+                }
+
+                // Tricubic interpolation whith gradient
+                cudaStat = interp3dWithGrad_gpu(vectInputs[0]->getGpuPtr(), //xp
+                                        vectInputs[1]->getGpuPtr(), //yp
+                                        vectInputs[2]->getGpuPtr(), //zp
+                                        sizeOfXp,
+                                        vectInputsItem[0]->getGpuPtr(), //x
+                                        vectInputsItem[1]->getGpuPtr(), //y
+                                        vectInputsItem[2]->getGpuPtr(), //z
+                                        vectInputsItem[3]->getGpuPtr(), //order
+                                        vectInputsItem[4]->getGpuPtr(), //coef
+                                        vectInputsItem[5]->getGpuPtr(), //minmax
+                                        vectInputsItem[0]->getSize(), //xSize
+                                        vectInputsItem[1]->getSize(), //ySize
+                                        vectInputsItem[2]->getSize(), //zSize
+                                        vectInputsItem[3]->getSize(), //orderSize
+                                        vectInputsItem[4]->getSize(), //coefSize
+                                        vectInputsItem[5]->getSize(), //minmaxSize
+                                        workSpace->getGpuPtr(),
+                                        tabOutputs[0]->getGpuPtr(), //Fp (result)
+                                        tabOutputs[1]->getGpuPtr(), //Fpdx (result)
+                                        tabOutputs[2]->getGpuPtr(), //Fpdy (result)
+                                        tabOutputs[3]->getGpuPtr(), //Fpdz (result)
+                                        iType);
+            }
+
+            delete workSpace;
+            if (cudaStat != cudaSuccess) throw cudaStat;
+
+// *** Return result in Scilab. ***
+            // Keep the result on the Device.
+            for(int i = 0; i < Lhs; i++)
+            {
+                PointerManager::getInstance()->addGpuPointerInManager(tabOutputs[i]);
+                createPointer(pvApiCtx, Rhs + i + 1, (void*)tabOutputs[i]);
+                if(sciErr.iErr) throw sciErr;
+                LhsVar(i + 1) = Rhs + i + 1;
+            }
+
+            for(int i = Lhs; i < 4; i++)
+            {
+                if(tabOutputs[i])
+                {
+                    delete tabOutputs[i];
+                }
+            }
+
+            for(int i = 0; i < 3; i++)
+            {
+                if(!isGpuPtr[i])
+                {
+                    delete vectInputs[i];
+                }
+            }
+
+            for(int i = 0; i < 6; i++)
+            {
+                if(!isGpuPtrItem[i])
+                {
+                    delete vectInputsItem[i];
+                }
+            }
+        }
+        #endif
+
+        PutLhsVar();
+        return 0;
+    }
+    catch(const char* str)
+    {
+        Scierror(999,"%s\n",str);
+    }
+    catch(SciErr E)
+    {
+        printError(&E, 0);
+    }
+
+    #ifdef WITH_CUDA
+    catch(cudaError_t cudaE)
+	{
+        GpuError::treat_error<CUDAmode>((CUDAmode::Status)cudaE);
+    }
+
+    if (useCuda())
+    {
+        // input
+        for(int i = 0; i < vectInputs.size(); i++)
+        {
+            if(!isGpuPtr[i])
+            {
+                delete vectInputs[i];
+            }
+        }
+
+        // input tlist elements
+        for(int i = 0; i < vectInputsItem.size(); i++)
+        {
+            if(!isGpuPtrItem[i])
+            {
+                delete vectInputsItem[i];
+            }
+        }
+
+        // output
+        if(tabOutputs[0])
+        {
+            for(int i = 0; i < 4; i++)
+            {
+                if(tabOutputs[i])
+                {
+                    delete tabOutputs[i];
+                }
+            }
+        }
+    }
+    #endif
+    #ifdef WITH_OPENCL
+    if (!useCuda())
+    {
+        Scierror(999,"gpuInterp3d : not yet implemented with OpenCL.\n");
+    }
+    #endif
+
+    return EXIT_FAILURE;
+}
+/* ========================================================================== */

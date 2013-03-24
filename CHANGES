@@ -1,0 +1,46 @@
+            Changes in sciGPGPU module of Scilab
+            ====================================
+
+License:
+========
+
+The license of all demos and examples have been changed to the 3-clause BSD
+license. The domain public license was not valid in some countries.
+
+Security issue:
+===============
+
+* Fix a (minor) security issue. CVE-2010-3378
+See: http://security-tracker.debian.org/tracker/CVE-2010-3378
+
+Known incompatibilities:
+========================
+
+
+Bugs:
+=========
+
+* bug 163 fixed -   sciCuda renamed (now sciGPGPU)
+
+* bug 168 fixed -   Move functions in cpp files.
+            Modified gpuApplyFunction.cpp and kernel.hpp, now the grid size is the number of blocks.
+            Modified Demo D2Q9 to apply this change.
+
+* bug 172 fixed -   Added functions to verified if device have been initialised.
+
+* bug 178 fixed -   Added header in files.
+
+
+Features:
+========
+
+* Link libs, includes and bin   -   Set the path of all libs, includes respectively in cudaLib.txt and cudaInc.txt
+                    Set the nvcc path in nvccdir.txt
+
+* Device info           -   cudaDeviceInfo and openclDeviceInfo functions display informations of GPU(s).
+
+* Product           -   gpuprod function use the function Dgemm of cublas lib.
+
+* Somme             -   gpuadd function use the function Daxpy of cublas lib.
+
+* fft               -   gpufftZ2Z2D function use the function cufftExecZ2Z of cufft lib

@@ -1,0 +1,280 @@
+// Copyright (C) 2008 - INRIA
+// Copyright (C) 2009 - DIGITEO
+// Copyright (C) 2012 - Scilab Enterprises
+// This file is released into the public domain
+// =============================================================================
+
+// load dependencies on CUDA and Opencl
+function loadDep()
+    // Load the good lib according the GPU (with/without Cuda)
+    if isNvidia() & isfile(root_tlbx+"/.libs/WithCuda/sci_gateway/c/loader.sce")
+        exec(root_tlbx+"/.libs/WithCuda/sci_gateway/c/loader.sce");
+    else
+        exec(root_tlbx+"/.libs/NoCuda/sci_gateway/c/loader.sce");
+    end
+
+    if getos() == "Windows" then
+      // check the install of Driver
+      if gpuWithCuda() then
+        ierr = execstr("link(""nvcuda.dll"",""cuMemAlloc_v2"",""c"")", "errcatch");
+        if ierr <> 0 then
+          error("Please install Nvidia Developer Drivers");
+        end
+      end
+
+      if gpuWithOpenCL() then
+        ierr = execstr("link(""OpenCL.dll"")", "errcatch");
+        if ierr <> 0 then
+          error("Please install Developer Drivers");
+        end
+      end
+
+      // get system arch
+      if win64() then
+        arch_path = "x64";
+        ver_lib = "64";
+      else
+        arch_path = "x86";
+        ver_lib = "32";
+      end
+
+      // check install of toolkit and load needed libs.
+      if gpuWithCuda() then
+        // check toolkit version
+        // get num version from path
+        cuda_path  = getenv("CUDA_PATH","");
+        if cuda_path == []
+            error("Please install CUDA Toolkit 3.2 to 4.0");
+        end
+        p = strsplit(cuda_path,filesep());
+        f  = find(p == "CUDA");
+        v = p(f+1);
+        v = strsubst(v,'v',"")
+        numVersion = eval(v);
+        if numVersion < 3.2 | numVersion > 4
+            error("Please install CUDA Toolkit 3.2 to 4.0");
+        end
+        // load libs
+        libPath = getenv("CUDA_BIN_PATH","");
+        libs = ls(libPath+filesep()+["cublas";"cufft";"cudart"]+ver_lib+"*"+getdynlibext());
+        for i=1:size(libs,'r')
+            link(libs(i));
+        end
+      end
+    end
+
+    if getos() == "Linux" then
+        v = mopen(root_tlbx+'/cudaLib.txt', 'rt');
+        i = 0;
+        while meof(v) == 0,
+            i = i+1;
+            libs(1,i) = mfscanf(v,'%s');
+        end;
+        nbrLib = i - 1;
+        mclose(v);
+
+        stat=ilib_verbose();
+        ilib_verbose(0);
+
+        if gpuWithCuda() then
+            ierr = execstr("link(""/usr/lib/libcuda" + getdynlibext() + """)", "errcatch");
+            if ierr <> 0 then
+                for i=1:nbrLib,
+                    ierr = execstr("link("""+libs(1,i)+"/libcuda" + getdynlibext() + """)", "errcatch");
+                    if ierr == 0 then lasterror(); break; end;
+                end
+                if ierr <> 0 then
+                    error("Please install Nvidia Developer Drivers");
+                end
+            end
+        end
+
+        if gpuWithOpenCL() then
+            ierr = execstr("link(""/usr/lib/libOpenCL" + getdynlibext() + """)", "errcatch");
+            if ierr <> 0 then
+                for i=1:nbrLib,
+                    ierr = execstr("link("""+libs(1,i)+"/libOpenCL" + getdynlibext() + """)", "errcatch");
+                    if ierr == 0 then lasterror(); break; end;
+                end
+                if ierr <> 0 then
+                    error("Please install Developer Drivers");
+                end
+            end
+        end
+
+        ilib_verbose(stat);
+
+        if gpuWithCuda() then
+
+          getNVCC_PATH();
+
+          str=unix_g(NVCC_PATH+"/nvcc --version");
+          line = str(4,1);
+          version = part(line,33:35);
+
+          if eval(version) < 3.2 | eval(version) > 4.0 then
+            error("Please install CUDA Toolkit 3.2 to 4.0");
+          end
+
+          [a, b] = getversion();
+          if b(1,2) == "x64" then
+            libDir = "../lib64/";
+          else
+            libDir = "../lib/";
+          end
+
+          link(NVCC_PATH + filesep() + libDir + "libcudart" + getdynlibext());
+          link(NVCC_PATH + filesep() + libDir + "libcublas" + getdynlibext());
+          link(NVCC_PATH + filesep() + libDir + "libcufft" + getdynlibext());
+       end
+    end
+
+    if getos() == "Darwin" then
+      if gpuWithCuda() then
+        ierr = execstr("link(""/usr/local/cuda/lib/libcuda" + getdynlibext() + """)", "errcatch");
+        if ierr <> 0 then
+          error("Please install Nvidia Developer Drivers");
+        end
+      end
+
+      if gpuWithOpenCL() then
+        ierr = execstr("link(""/System/Library/Frameworks/OpenCL.framework/Libraries/libcldcpuengine" + getdynlibext() + """)", "errcatch");
+        if ierr <> 0 then
+          error("Please check OpenCL support.");
+        end
+      end
+
+      if gpuWithCuda() then
+          NVCC_PATH = "/usr/local/cuda/bin";
+          str = unix_g(NVCC_PATH + "/nvcc --version");
+          line = str(4,1);
+          version = part(line,33:35);
+          if eval(version) < 3.2 | eval(version) > 4.0 then
+            error("Please install CUDA Toolkit 3.2 to 4.0");
+          end
+
+          libdir = "/usr/local/cuda/lib/";
+          link(libdir + "libcudart" + getdynlibext());
+          link(libdir + "libcublas" + getdynlibext());
+          link(libdir + "libcufft" + getdynlibext());
+        end
+    end
+
+    mprintf("\tLoad gateways\n");
+    ilib_verbose(0);
+    if gpuWithCuda() then
+        exec(root_tlbx+"/.libs/WithCuda/sci_gateway/cpp/loader.sce");
+    else
+        exec(root_tlbx+"/.libs/NoCuda/sci_gateway/cpp/loader.sce");
+    end
+
+    err = 0;
+    if gpuWithCuda() then
+      if gpuDoubleCapability() then
+        mprintf("GPU Double Capability... Ok");
+        ierr = execstr("gpuInit();", "errcatch")
+        if ierr <> 0 then
+            err = 1;
+            disp(lasterror())
+            if ierr == 101 then gpuDeviceInfo(); end;
+            errmsg = "Initialization failed.";
+        end
+      else
+        err = 1;
+        if(gpuDeviceInfo())
+            disp(lasterror());
+        else
+            errmsg = "Your device not support double precision.";
+        end
+      end
+    end
+
+    if err == 1 then
+        ulink();
+        functions = ['gpuBuild';
+                   'gpuAdd';
+                   'gpuMult';
+                   'gpuFFT';
+                   'gpuMax';
+                   'gpuMin';
+                   'gpuNorm';
+                   'gpuSum';
+                   'gpuTranspose';
+                   'gpuAlloc';
+                   'gpuApplyFunction';
+                   'gpuDeviceInfo';
+                   'gpuDeviceMemInfo';
+                   'gpuDoubleCapability';
+                   'gpuExit';
+                   'gpuFree';
+                   'gpuGetData';
+                   'gpuSetData';
+                   'gpuInit';
+                   'gpuLoadFunction';
+                   'gpuSize';
+                   'gpuUseCuda';
+                   'gpuPtrInfo';
+                   'isGpuPointer';
+                   'gpuInterp';
+                   'gpuInterp2d';
+                   'gpuMatrix';
+                   'gpuExtract';
+                   'gpuInsert';
+                   'gpuSubtract';
+                   'gpuClone';
+                   'gpuDotMult';
+                   'gpuComplex'];
+        nbrFunc = size(functions);
+        for i = 1:nbrFunc(1), clearfun(functions(i,1));end;
+        error(errmsg);
+    end
+endfunction
+
+// =============================================================================
+mprintf("Start sciGPGPU\n");
+
+if isdef("toolbox_sciGPGPU") then
+  warning("Toolbox sciGPGPU library is already loaded");
+  return;
+end
+
+etc_tlbx  = get_absolute_file_path("sciGPGPU.start");
+etc_tlbx  = getshortpathname(etc_tlbx);
+root_tlbx = strncpy( etc_tlbx, length(etc_tlbx)-length("\etc\") );
+
+//Load  functions library
+// =============================================================================
+
+mprintf("\tLoad macros\n");
+pathmacros = pathconvert( root_tlbx ) + "macros" + filesep();
+sciGPGPUlib = lib(pathmacros);
+clear pathmacros;
+
+// Load and add help chapter
+// =============================================================================
+if or(getscilabmode() == ["NW";"STD"]) then
+    mprintf("\tLoad help\n");
+    path_addchapter = pathconvert(root_tlbx+"/jar");
+    if ( isdir(path_addchapter) <> [] ) then
+        add_help_chapter("sciCuda", path_addchapter, %F);
+        clear add_help_chapter;
+    end
+    clear path_addchapter;
+end
+
+// load dependencies on CUDA and Opencl
+// =============================================================================
+loadDep();
+clear loadDep;
+
+// Load demos
+// =============================================================================
+if gpuWithCuda() & gpuDoubleCapability() then
+    if or(getscilabmode() == ["NW";"STD"]) then
+        mprintf("\n\tLoad demos\n");
+        pathdemos = pathconvert(root_tlbx+"/demos/sciGPGPU.dem.gateway.sce", %F, %T);
+        add_demo("sciGPGPU", pathdemos);
+    end
+end
+
+// =============================================================================

@@ -1,0 +1,76 @@
+// =============================================================================
+// Scilab ( http://www.scilab.org/ ), This file is part of Scilab
+// Copyright (C) DIGITEO, 2011, Cedric Delamarre
+//
+//  This file is distributed under the same license as the Scilab package.
+// =============================================================================
+// <-- ENGLISH IMPOSED,->
+A = rand(3,2);
+B = rand(2,4);
+//,------------ Check the first option,------------
+cpuRes = A * B;
+d = gpuMult(A, B);
+h = gpuGetData(d);
+gpuFree(d);
+assert_checkalmostequal(cpuRes, h, %eps, [], "matrix");
+//,------------ Real/Complex,------------
+ca = rand(3,4) + %i * rand(3,4);
+cb = 2 * rand(4,2) + %i * 3 * rand(4,2);
+c  = rand(3,4);
+d  = 2 * rand(4,2);
+gpu = gpuMult(2,3);
+assert_checkalmostequal(gpuGetData(gpu), (2*3), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(c,3);
+assert_checkalmostequal(gpuGetData(gpu), (c*3), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2,d);
+assert_checkalmostequal(gpuGetData(gpu), (2*d), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(c,d);
+assert_checkalmostequal(gpuGetData(gpu), (c*d), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2*%i,3*%i);
+assert_checkalmostequal(gpuGetData(gpu), (2*%i*3*%i), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(ca,3*%i);
+assert_checkalmostequal(gpuGetData(gpu), (ca*3*%i), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2*%i,cb);
+assert_checkalmostequal(gpuGetData(gpu), (2*%i*cb), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(ca,cb);
+assert_checkalmostequal(gpuGetData(gpu), (ca*cb), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2,3*%i);
+assert_checkalmostequal(gpuGetData(gpu), (2*3*%i), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(c,3*%i);
+assert_checkalmostequal(gpuGetData(gpu), (c*3*%i), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2,cb);
+assert_checkalmostequal(gpuGetData(gpu), (2*cb), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(c,cb);
+assert_checkalmostequal(gpuGetData(gpu), (c*cb), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2*%i,3);
+assert_checkalmostequal(gpuGetData(gpu), (2*%i*3), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(ca,3);
+assert_checkalmostequal(gpuGetData(gpu), (ca*3), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(2*%i,d);
+assert_checkalmostequal(gpuGetData(gpu), (2*%i*d), %eps, [], "matrix");
+gpuFree(gpu);
+gpu = gpuMult(ca,d);
+assert_checkalmostequal(gpuGetData(gpu), (ca*d), %eps, [], "matrix");
+gpuFree(gpu);
+//,------------ some tests,------------
+stacksize(50000000);
+a = rand(256,256);
+ierr = execstr("d = gpuMult(a,a); gpuFree(d);","errcatch");
+if ierr == 999 then bugmes();quit;end;
+a = rand(3000,3000);
+ierr = execstr("d = gpuMult(a,a); gpuFree(d);","errcatch");
+if ierr == 999 then bugmes();quit;end;

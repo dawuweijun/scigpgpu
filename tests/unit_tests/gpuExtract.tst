@@ -1,0 +1,33 @@
+// =============================================================================
+// Scilab ( http://www.scilab.org/ ), This file is part of Scilab
+// Copyright (C) Scilab Enterprises, 2013, Cedric Delamarre
+//
+//  This file is distributed under the same license as the Scilab package.
+// =============================================================================
+
+a=matrix(1:100,10,10);
+da=gpuSetData(a);
+b=matrix(1:5:100,2,10);
+db=gpuSetData(b);
+
+d=gpuExtract(da,gpuExtract(db,1:2:20));
+c=gpuGetData(d);
+assert_checkequal(c, a(b(1:2:20)));
+
+// overload of extraction
+d=da(db(1:2:20));
+c=gpuGetData(d);
+assert_checkequal(c, a(b(1:2:20)));
+d=gpuFree(d);
+
+d=da(1,:);
+assert_checkequal(gpuGetData(d), a(1,:));
+d=gpuFree(d);
+
+d=da(:,[1 3]);
+assert_checkequal(gpuGetData(d), a(:,[1 3]));
+d=gpuFree(d);
+
+d=db(:);
+assert_checkequal(gpuGetData(d), b(:));
+d=gpuFree(d);
